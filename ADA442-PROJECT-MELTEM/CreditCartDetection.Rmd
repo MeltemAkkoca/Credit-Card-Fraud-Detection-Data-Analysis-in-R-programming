@@ -1,0 +1,749 @@
+---
+title: "ADA 442 - Project Report"
+subtitle: "Credit Card Fraud Detection"
+author: "Meltem Akkoca - Berkay Dursun"
+date: "2023-01-06"
+output: 
+  pdf_document:
+    number_sections: yes
+    toc: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+tinytex::install_tinytex(force=TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Introduction
+
+Explain your motivation for selecting this project.
+
+-   Describe the problem you investigate in your project.
+
+    -   The project we chose is called Credit Cart Fraud Detection
+        because in these days, credit card fraud is a significant issue in the 
+        financial sector. Yearly loss of millions of money results from 
+        fraudulent card transactions.
+
+-   State the problem
+
+    -   In fact, if we need to describe our problem in general around this 
+    issue, we can call it as trying to find a way to reduce money losses by 
+    increasing fraud detection with machine learning models and strategies. 
+    However, due to the extreme imbalance of these data, it seemed quite 
+    difficult to design and implement these models. In addition, due to the 
+    hidden data that is not open to the public, which we will talk about in 
+    our project, it has become much more difficult to determine a strategy and 
+    continues to arouse curiosity.
+
+-   State the research objectives that you want to accomplish
+
+    -   The aim of this project is to implement strategies that can successfully
+    predict fraudulent transactions as given in our data, work in harmony with 
+    the sampling and modeling techniques most suitable for our data due to the 
+    imbalance of our data set, and give the closest approach to the truth.
+
+# Methodology
+
+Briefly describe the statistical modeling you will employ to analyze the
+data.
+
+-   Why it is suitable for your design?
+
+-   The main equations and properties can be summarized before going
+    further on modeling.
+
+    -   While developing the project, we started with the models that we 
+    thought were simpler, and continued with the models that looked more 
+    complex and that we thought might yield better results. When we were 
+    surprised by the result at the end of the project, it helped us understand
+    that the complexity of the model was not directly proportional to the 
+    accuracy of the model.
+
+    -   We started out with Decision Tree model. Then we tried Logistic
+    Regression, Random Forest and then we also tried XG Boost, which 
+    is based on Gradient Boosted Trees.
+
+```{r}
+#Importing Libraries
+
+library(dplyr) # for data manipulation
+library(stringr) # for data manipulation
+library(caret) # for sampling
+library(caTools) # for train/test split
+library(ggplot2) # for data visualization
+library(corrplot) # for correlations
+library(ROSE)# for ROSE sampling
+library(rpart)# for decision tree model
+library(Rborist)# for random forest model
+library(xgboost) # for xgboost model
+library(data.table) # for data manipulation
+library(plyr) # for data manipulation
+library(pROC) # for ROC analyzes
+library(glmnet) # for fit regression models
+```
+
+# Data Set
+
+-Describe the data set you used in the analysis.
+
+-   We got our dataset from Kaggle and imported it. Due to the privacy and 
+security of the data, we cannot provide detailed information on what the 
+features are, but what we do know is that due to the PCA transformation, the 
+features only contain numeric input variables. Our features are Time, Amount, 
+Class and features from V1 to V28.
+-Time: Expresses the time in seconds between two transactions.
+-Amount: refers to the transaction amount.
+-Class: Response variable and takes the value 1 for Fraud and 0 for Non-Fraud.
+
+```{r}
+# load data from csv file
+data = read.csv('creditcard.csv')
+
+head(data)
+
+summary(data)
+
+# We checked that if there is any missing data or not (We can see in results 
+#none of the variables have missing values)
+apply(data, 2, function(x) sum(is.na(x)))
+
+```
+
+As a result of the outputs of the above operations, we can see that the mean 
+values of our hidden features are normalized to 0. In addition, when we check 
+if there is missing data, the result is 0, so there is no missing data in the 
+dataset.
+
+Checking for imbalances of the dataset to apply some sampling methods.
+
+```{r}
+
+# Checking imbalance of class features
+table(data$Class)
+
+# shows that probability of the imbalance of the class features(non-fraud or fraud )
+prop.table(table(data$Class))
+
+```
+
+
+```{r}
+
+common_theme <- theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+ggplot(data = data, aes(x = factor(Class), 
+                          y = prop.table(stat(count)), fill = factor(Class),
+                          label = scales::percent(prop.table(stat(count))))) +
+    geom_bar(position = "dodge") + 
+    geom_text(stat = 'count',
+              position = position_dodge(.9), 
+              vjust = -0.5, 
+              size = 3) + 
+    scale_x_discrete(labels = c("no fraud", "fraud"))+
+    scale_y_continuous(labels = scales::percent)+
+    labs(x = 'Class', y = 'Percentage') +
+    ggtitle("Distribution of class labels") +
+    common_theme
+```
+
+By looking at the table we created above, we can clearly see how big 
+the difference is between the two classes of data (no fraud 0 and fraud 1)
+and how unevenly the dataset is distributed between these two classes. 
+Even if the data is not complete, we can understand that almost 100% of the 
+data belongs to non-fraud transactions. An accuracy approach that sees 
+non fraud, that is, class=0 as having an accuracy close to 100%, will not be 
+a correct practice as it will create insensitivity to false positives here.
+
+That's why we can transform the data itself with sampling methods.
+
+1-)Original data
+
+2-)Up-sampling data
+
+3-)Down-sampling data
+
+4-)ROSE (random over-sampling examples) sampling data
+
+```{r}
+correlations <- cor(data[,],method="pearson")
+corrplot(correlations, number.cex = .9, method = "circle", type = "full", tl.cex=0.8,tl.col = "black")
+```
+
+As we mentioned before, since our features are confidential, the relationship 
+of these features with each other, that is, the knowledge of how they correlate
+with each other, has become important for us. So we looked at the correlation 
+of V1-V28s, Time and Amount properties. We concluded that all these features are
+not very related to each other.
+
+Now, as we explained before, we will apply some sampling methods that we think 
+can make our unbalanced data more balanced, on 4 different models we want to 
+apply, and see which one is more suitable for our data.
+
+# Data Preparation
+
+
+```{r}
+
+#convert all class features to factor
+
+data$Class <- as.factor(data$Class)
+
+#converted names
+levels(data$Class) <- c("Not_Fraud", "Fraud")
+
+#Scale numeric variables
+
+data[,-31] <- scale(data[,-31])
+
+head(data)
+
+summary(data)
+
+
+```
+As we mentioned before, since our features are hidden, we do not know
+about the unit of each feature, so we used the scale function here to
+standardize them, that is, to set their mean to 0 and their standard
+deviation to 1, and to gather us in a single measure about their units.
+
+```{r}
+set.seed(123)
+
+split <- sample.split(data$Class, SplitRatio = 0.8)
+
+train <-  subset(data, split == TRUE)
+
+test <- subset(data, split == FALSE)
+
+```
+
+We split the data into test and train data with 20% and 80% ratio.
+
+
+# Sampling Techniques
+
+## Down-Sampling
+
+This method helps to reduce the number of observations of the class 
+that has the majority and to balanced the data set.
+
+## Up-Sampling
+
+This method helps to make a trade-off by replicates minority-class observations.  
+It works with a logic similar to the down-sampling method.
+
+## ROSE (random over-sampling examples)
+
+Instead of replicating and adding the observations from the minority
+class, it overcome imbalances by generates artificial data. It is also a
+type of oversampling technique. It uses smoothed bootstrapping to draw
+artificial samples from the feature space neighbourhood around the
+minority class.
+
+The original data ratios:
+
+```{r}
+# initial class ratio of data
+table(train$Class)
+```
+
+Data ratio after up-sampling technique is applied:
+
+```{r}
+# up_sampling
+set.seed(9560)
+up_train <- upSample(x = train[, -ncol(train)],
+                         y = train$Class)
+table(up_train$Class)
+```
+
+Data ratio after down-sampling technique is applied:
+
+```{r}
+# down_sampling
+set.seed(9560)
+down_train <- downSample(x = train[, -ncol(train)],
+                         y = train$Class)
+table(down_train$Class)
+```
+
+Data ratio after rose-sampling technique is applied:
+
+```{r}
+# rose_sampling
+set.seed(9560)
+rose_train <- ROSE(Class ~ ., data  = train)$data 
+
+table(rose_train$Class)
+```
+```{r}
+rownames = c("Original ", "Up-sampling ", "Down-sampling ", "Rose-sampling")
+colnames = c("Not-Fraud ","Fraud ")
+#Define a matrix
+matrix <- matrix(cbind(c(227452,394),c(227452,227452),c(394,394),c(114081,113765)), nrow = 4,ncol = 2 ,byrow = TRUE, dimnames = list(rownames, colnames))
+print(matrix)
+```
+
+# Models
+
+While evaluating the binary classification algorithm, we used the receiver 
+operating characteristic (ROC) curve, so it would be easier to visually 
+understand the performance of the classifier. As you can see from the graphs 
+below, being closest to the True Positive line actually represents an almost 
+perfect classifier for us. In other words, what we are looking for in this 
+system is to find the ratio with the highest true positive and the lowest false 
+positive ratio.
+
+In our result we tried a lot of example with using original data,
+down-sampling data, up-sampling data and rose sampling data and with
+this sampling methods we use four different models such as Decision
+Tree, Logistic Regression, Random Forest and XG Boost. We are looking at
+this models by using sampling methods in each of them and then, we made
+a decision about which of the model is better for our data set.
+
+# Decision Trees
+
+Firstly, we are looking at Decision Tree model. We put original data,
+down-sampling data, up-sampling data and rose sampling data in the
+decision tree model.
+
+Decision trees on original (imbalanced) data set
+
+```{r}
+#Decision Tree Model Performance on original imbalanced data
+set.seed(5627)
+
+orig_fit <- rpart(Class ~ ., data = train)
+
+#Evaluate model performance on test set
+pred_orig <- predict(orig_fit, newdata = test, method = "class")
+
+roc.curve(test$Class, pred_orig[,2], plotit = TRUE)
+```
+
+Decision trees on up-sampled dataset
+
+```{r}
+set.seed(5627)
+# Build up-sampled model with Decision Tree
+
+
+up_fit <- rpart(Class ~ ., data = up_train)
+
+# AUC on up-sampled data
+pred_up <- predict(up_fit, newdata = test)
+
+roc.curve(test$Class, pred_up[,2], plotit = TRUE)
+
+```
+
+Decision trees on down-sampled dataset
+
+```{r}
+set.seed(5627)
+# Build down-sampled model with Decision Tree
+
+
+down_fit <- rpart(Class ~ ., data = down_train)
+
+
+# AUC on down-sampled data
+pred_down <- predict(down_fit, newdata = test)
+
+roc.curve(test$Class, pred_down[,2], plotit = TRUE)
+
+```
+
+Decision trees on rose-sampled dataset
+
+```{r}
+set.seed(5627)
+# Build rose model with Decision Tree
+
+
+rose_fit <- rpart(Class ~ ., data = rose_train)
+
+# AUC on rose data
+pred_rose <- predict(rose_fit, newdata = test)
+
+roc.curve(test$Class, pred_rose[,2], plotit = TRUE)
+
+```
+
+If we look at the roc curve generally we can see that our roc curves
+close to the best one which means that close to true positive one. Then
+if we want to examine detailly or down to a single metric, AUC is useful
+for us in this issue. AUC stands for area under the (ROC) curve.
+Generally, the higher the AUC score (closest to 1.0), the better a classifier
+performs for the given task. 
+
+In our result we see that in decision tree model;
+
+-   with original data the AUC is 0.903,
+-   with up-sampling data the AUC is 0.944,
+-   with down-sampling data the AUC is 0.943,
+-   with rose-sampling data the AUC is 0.938.
+
+If wee look at the AUC results, the better result or the closest one to
+the TP line is up-sampling method in decision tree model.
+
+# Logistic Regression
+
+Secondly, we are looking at Logistic Regression model. We put original
+data, down-sampling data, up-sampling data and rose sampling data in the
+logistic regression model.
+
+Logistic Regression on original (imbalanced) dataset
+
+```{r}
+#Logistic regression with original imbalanced data
+
+glm_fit <- glm(Class ~ ., data = train, family = 'binomial')
+
+pred_glm <- predict(glm_fit, newdata = test, type = 'response')
+
+roc.curve(test$Class, pred_glm, plotit = TRUE)
+```
+
+Logistic Regression on up-sampled dataset
+
+```{r}
+#Logistic regression with up_train sampling technique
+
+glm_fit <- glm(Class ~ ., data = up_train, family = 'binomial')
+
+pred_glm <- predict(glm_fit, newdata = test, type = 'response')
+
+roc.curve(test$Class, pred_glm, plotit = TRUE)
+```
+
+Logistic Regression on down-sampled dataset
+
+```{r}
+#Logistic regression with down_train sampling technique
+
+glm_fit <- glm(Class ~ ., data = down_train, family = 'binomial')
+
+pred_glm <- predict(glm_fit, newdata = test, type = 'response')
+
+roc.curve(test$Class, pred_glm, plotit = TRUE)
+```
+
+Logistic Regression on rose-sampled dataset
+
+```{r}
+#Logistic regression with rose_train sampling technique
+
+glm_fit <- glm(Class ~ ., data = rose_train, family = 'binomial')
+
+pred_glm <- predict(glm_fit, newdata = test, type = 'response')
+
+roc.curve(test$Class, pred_glm, plotit = TRUE)
+```
+
+In our result we see that in logistic regression model;
+
+-   with original data the AUC is 0.974,
+-   with up-sampling data the AUC is 0.976,
+-   with down-sampling data the AUC is 0.981,
+-   with rose-sampling data the AUC is 0.973.
+
+If wee look at the AUC results, the better result or the closest one to
+the TP line is down-sampling method in decision tree model.
+
+# Random Forest
+
+Thirdly, we are looking at Random Forest model. We put original data,
+down-sampling data, up-sampling data and rose sampling data in the
+random forest model.
+
+Random Forest on original (imbalanced) dataset
+
+```{r}
+#Random Forest with original imbalanced data
+
+x = train[, -31]
+y = train[,31]
+
+rf_fit <- Rborist(x, y, ntree = 1000, minNode = 20, maxLeaf = 13)
+
+
+rf_pred <- predict(rf_fit, test[,-31], ctgCensus = "prob")
+prob <- rf_pred$prob
+
+roc.curve(test$Class, prob[,2], plotit = TRUE, )
+```
+
+Random Forest on up-sampled dataset
+
+```{r}
+#Random Forest with up_train sampling
+
+x = up_train[, -31]
+y = up_train[,31]
+
+rf_fit <- Rborist(x, y, ntree = 1000, minNode = 20, maxLeaf = 13)
+
+
+rf_pred <- predict(rf_fit, test[,-31], ctgCensus = "prob")
+prob <- rf_pred$prob
+
+roc.curve(test$Class, prob[,2], plotit = TRUE, )
+```
+
+Random Forest on down-sampled dataset
+
+```{r}
+#Random Forest with down_train sampling
+
+x = down_train[, -31]
+y = down_train[,31]
+
+rf_fit <- Rborist(x, y, ntree = 1000, minNode = 20, maxLeaf = 13)
+
+
+rf_pred <- predict(rf_fit, test[,-31], ctgCensus = "prob")
+prob <- rf_pred$prob
+
+roc.curve(test$Class, prob[,2], plotit = TRUE, )
+```
+
+Random Forest on rose-sampled dataset
+
+```{r}
+#Random Forest with rose_train sampling
+
+x = rose_train[, -31]
+y = rose_train[,31]
+
+rf_fit <- Rborist(x, y, ntree = 1000, minNode = 20, maxLeaf = 13)
+
+
+rf_pred <- predict(rf_fit, test[,-31], ctgCensus = "prob")
+prob <- rf_pred$prob
+
+roc.curve(test$Class, prob[,2], plotit = TRUE, )
+```
+
+In our result we see that in random forest model;
+
+-   with original data the AUC is 0.913,
+-   with up-sampling data the AUC is 0.975,
+-   with down-sampling data the AUC is 0.976,
+-   with rose-sampling data the AUC is 0.968.
+
+If wee look at the AUC results, the better result or the closest one to
+the TP line is down-sampling method in random forest model.
+
+# XG Boost
+
+Fourthly, we are looking at XG Boost model. We put original data,
+down-sampling data, up-sampling data and rose sampling data in the xg
+boost model.
+
+XG Boost on original (imbalanced) dataset
+
+```{r}
+
+#XG BOOST original imbalanced data
+
+# Convert class labels from factor to numeric
+
+labels_original <- train$Class
+
+y <- recode(labels_original, 'Not_Fraud' = 0, "Fraud" = 1)
+
+set.seed(42)
+xgb <- xgboost(data = data.matrix(train[,-31]), 
+ label = y,
+ eta = 0.1,
+ gamma = 0.1,
+ max_depth = 10, 
+ nrounds = 300, 
+ objective = "binary:logistic",
+ colsample_bytree = 0.6,
+ verbose = 0,
+ nthread = 7,
+)
+xgb_pred <- predict(xgb, data.matrix(test[,-31]))
+
+roc.curve(test$Class, xgb_pred, plotit = TRUE)
+```
+
+XG Boost on up-sampled dataset
+
+```{r}
+
+#XG BOOST up_train sampling technique
+
+# Convert class labels from factor to numeric
+
+labels_up <- up_train$Class
+
+y <- recode(labels_up, 'Not_Fraud' = 0, "Fraud" = 1)
+
+set.seed(42)
+xgb <- xgboost(data = data.matrix(up_train[,-31]), 
+ label = y,
+ eta = 0.1,
+ gamma = 0.1,
+ max_depth = 10, 
+ nrounds = 300, 
+ objective = "binary:logistic",
+ colsample_bytree = 0.6,
+ verbose = 0,
+ nthread = 7,
+)
+xgb_pred <- predict(xgb, data.matrix(test[,-31]))
+
+roc.curve(test$Class, xgb_pred, plotit = TRUE)
+```
+
+XG Boost on down-sampled dataset
+
+```{r}
+
+#XG BOOST down_train sampling technique
+
+# Convert class labels from factor to numeric
+
+labels_down <- down_train$Class
+
+y <- recode(labels_down, 'Not_Fraud' = 0, "Fraud" = 1)
+
+set.seed(42)
+xgb <- xgboost(data = data.matrix(down_train[,-31]), 
+ label = y,
+ eta = 0.1,
+ gamma = 0.1,
+ max_depth = 10, 
+ nrounds = 300, 
+ objective = "binary:logistic",
+ colsample_bytree = 0.6,
+ verbose = 0,
+ nthread = 7,
+)
+xgb_pred <- predict(xgb, data.matrix(test[,-31]))
+
+roc.curve(test$Class, xgb_pred, plotit = TRUE)
+```
+
+XG Boost on rose-sampled dataset
+
+```{r}
+
+#XG BOOST rose_train sampling technique
+
+# Convert class labels from factor to numeric
+
+labels_rose <- rose_train$Class
+
+y <- recode(labels_rose, 'Not_Fraud' = 0, "Fraud" = 1)
+
+set.seed(42)
+xgb <- xgboost(data = data.matrix(rose_train[,-31]), 
+ label = y,
+ eta = 0.1,
+ gamma = 0.1,
+ max_depth = 10, 
+ nrounds = 300, 
+ objective = "binary:logistic",
+ colsample_bytree = 0.6,
+ verbose = 0,
+ nthread = 7,
+)
+xgb_pred <- predict(xgb, data.matrix(test[,-31]))
+
+roc.curve(test$Class, xgb_pred, plotit = TRUE)
+```
+
+In our result we see that in XG Boost model;
+
+-   with original data the AUC is 0.975,
+-   with up-sampling data the AUC is 0.977,
+-   with down-sampling data the AUC is 0.979,
+-   with rose-sampling data the AUC is 0.960.
+
+If wee look at the AUC results, the better result or the closest one to
+the TP line is down-sampling method in XG Boost model.
+
+```{r}
+# Define the column and row names.
+colnames = c("Original ", "Up-sampling ", "Down-sampling ", "Rose-sampling")
+rownames = c("Decision Tree ", "Logistic Regression ", "Random Forest ", "XG Boost ")
+#Define a matrix
+matrix <- matrix(cbind(c(0.903 ,0.944 ,0.943 ,0.938 ),c(0.974,0.976,0.981,0.973),c(0.913,0.975,0.976,0.968),c(0.975,0.977,0.979,0.960)), nrow = 4,ncol = 4 ,byrow = TRUE, dimnames = list(rownames, colnames))
+print(matrix)
+```
+To show our result in a one matrix table.
+
+
+# Conclusion
+
+In conclusion, We found that;
+
+1- Up-sampling method gives us better result in decision tree model. So,
+up-sampling is the most suitable sampling technique for the decision
+tree model in our dataset.
+
+2- Down-sampling method gives us better result in logistic regression
+model. As a result of, down-sampling is the most suitable sampling
+technique for the logistic regression model in our dataset.
+
+3- Down-sampling method gives us better result in random forest model.
+As a result of, down-sampling is the most suitable sampling technique
+for the random forest model in our dataset.
+
+4- Down-sampling method gives us better result in XG Boost model. As a
+result of, down-sampling is the most suitable sampling technique for the
+XG Boost model in our dataset.
+
+The best sampling technique's AUC scores for the models are;
+
+1- Decision Tree: 0.944
+
+2- Logistic Regression: 0.981
+
+3- Random Forest: 0.976
+
+4- XG Boost: 0.979
+
+To sum up, we searched for the answer to the question of how we can make the our
+data more balanced in our Credit Card Fraud Detection project, that is, 
+in a project where fraud cases are quite low and the dataset is very imbalanced. 
+In response to this question, we saw that some resampling methods could be 
+tried, besides, we tried these methods not only on a single model, but also 
+on 4 different models, and determined which sampling method would perform better
+on which model for our data set. Among the sampling methods, we saw that the 
+down-sampling method showed the best performance on 3 different models. 
+We have come to the conclusion that the model that shows the most appropriate 
+approach for our data, standing out among the complex algorithms such as 
+Decision Tree, Random Forest and XG Boost, is Logistic Regression with a 
+value of 0.981 AUC.
+
+# References
+
+-- Ingle, A. (2020, December 21). Credit Card Fraud Detection with R +
+(sampling). Kaggle.
+<https://www.kaggle.com/code/atharvaingle/credit-card-fraud-detection-with-r-sampling/notebook>
+
+-- Zientala, P. (n.d.). Credit card fraud detection using Machine
+Learning.
+<http://rstudio-pubs-static.s3.amazonaws.com/334864_28050f7860dd4927a596872f0cd52401.html>
+
+-- Team, T. A. I. (2020, May 29). How, When, and Why Should You
+Normalize / Standardize / Rescale. . . Towards AI.
+<https://towardsai.net/p/data-science/how-when-and-why-should-you-normalize-standardize-rescale-your-data-3f083def38ff>
+
+-- Team, T. A. I. (2022, March 17). Standardize Data Frame Columns in R
+(2 Examples) \| scale Function. Statistics Globe.
+<https://statisticsglobe.com/standardize-data-frame-columns-in-r-scale-function>
+
+-- Steen, D. (2021, December 15). Understanding the ROC Curve and AUC -
+Towards Data Science. Medium.
+<https://towardsdatascience.com/understanding-the-roc-curve-and-auc-dd4f9a192ecb>
